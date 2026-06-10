@@ -22,6 +22,7 @@ This is a hobby project maintained in my spare time. If you find these toolboxes
 - [ROCm 7 Performance Regression Workaround](#rocm-7-performance-regression-workaround)
 - [Supported Toolboxes](#supported-toolboxes)
 - [Quick Start](#quick-start)
+- [Gemma 4 MTP Speculative Decoding (Atomic Toolbox)](#gemma-4-mtp-speculative-decoding-atomic-toolbox)
 - [Host Configuration](#host-configuration)
 - [Performance Benchmarks](#performance-benchmarks)
 - [Memory Planning and VRAM Estimator](#memory-planning-and-vram-estimator)
@@ -54,6 +55,7 @@ You can check the containers on DockerHub: [kyuz0/amd-strix-halo-toolboxes](http
 | `vulkan-radv` | Vulkan (Mesa RADV) | Most stable and compatible. Recommended for most users and all models. |
 | `rocm-6.4.4` | ROCm 6.4.4 (Fedora 43) | Latest stable 6.x build. Uses Fedora 43 packages with backported patch for **kernel 6.18.4+** support. |
 | `rocm-7.2.2` | ROCm 7.2.2 | Latest stable 7.x build. Includes patch for **kernel 6.18.4+** support. |
+| `rocm-7.2.2-atomic` | ROCm 7.2.2 + [AtomicBot-ai/atomic-llama-cpp-turboquant](https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant) | **Experimental.** Adds Gemma 4 MTP speculative decoding (`--mtp-head`, `--spec-type mtp`) and TurboQuant WHT-rotated KV/weight quantization (`-ctk turbo3 -ctv turbo3`). Built from the fork's `feature/turboquant-kv-cache` branch. HIP backend coverage of TurboQuant is partial — verify on your model before relying on it. |
 | `rocm7-nightlies` | ROCm 7 Nightly | Tracks nightly builds. Includes patch for **kernel 6.18.4+** support. |
 
 > These containers are **automatically** rebuilt whenever the Llama.cpp master branch is updated. Legacy images (`rocm-6.4.2`, `rocm-6.4.3`, `rocm-7.1.1`) are excluded from this list.
@@ -127,6 +129,42 @@ Refresh your authenticated toolboxes to the latest nightly/stable builds:
 ```bash
 ./refresh-toolboxes.sh all
 ```
+
+## Gemma 4 MTP Speculative Decoding (Atomic Toolbox)
+
+The `rocm-7.2.2-atomic` toolbox adds Gemma 4 Multi-Token Prediction speculative decoding, which reuses the target model's KV cache and tokenizer (no separate draft model overhead). Pre-built assistant heads are published under the [AtomicChat](https://huggingface.co/AtomicChat) org on Hugging Face.
+
+```sh
+toolbox create llama-rocm-7.2.2-atomic \
+  --image docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-7.2.2-atomic \
+  -- --device /dev/dri --device /dev/kfd \
+  --group-add video --group-add render --group-add sudo --security-opt seccomp=unconfined
+
+toolbox enter llama-rocm-7.2.2-atomic
+```
+
+**MTP only** — recommended starting point; most of the speedup, no quantization risk:
+
+```sh
+llama-server \
+  -m models/gemma-4-target.gguf \
+  --mtp-head models/gemma-4-assistant.gguf \
+  --spec-type mtp --draft-block-size 3 \
+  -ngl 999 -ngld 99 -fa 1 --no-mmap -c 16384
+```
+
+**MTP + TurboQuant KV cache compression** — combine both for longer contexts:
+
+```sh
+llama-server \
+  -m models/gemma-4-target.gguf \
+  --mtp-head models/gemma-4-assistant.gguf \
+  --spec-type mtp --draft-block-size 3 \
+  -ctk turbo3 -ctv turbo3 -ctkd turbo3 -ctvd turbo3 \
+  -ngl 999 -ngld 99 -fa 1 --no-mmap -c 32768
+```
+
+`-ctkd`/`-ctvd` apply the same KV typing to the assistant's offloaded cache. Helper scripts shipped by the fork (`run-gemma4-mtp-server.sh`, etc.) are bundled in the image at `/usr/local/share/atomic-llama/`. HIP backend coverage of TurboQuant is partial — verify quality on your model before relying on it.
 
 ## Host Configuration
 
